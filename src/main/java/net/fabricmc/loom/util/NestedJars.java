@@ -39,11 +39,6 @@ import com.google.gson.GsonBuilder;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import org.apache.commons.io.FileUtils;
-import org.zeroturnaround.zip.FileSource;
-import org.zeroturnaround.zip.ZipEntrySource;
-import org.zeroturnaround.zip.ZipUtil;
-import org.zeroturnaround.zip.transform.StringZipEntryTransformer;
-import org.zeroturnaround.zip.transform.ZipEntryTransformerEntry;
 import org.gradle.api.Project;
 import org.gradle.api.Task;
 import org.gradle.api.artifacts.Configuration;
@@ -51,6 +46,11 @@ import org.gradle.api.artifacts.Dependency;
 import org.gradle.api.artifacts.DependencySet;
 import org.gradle.api.artifacts.ProjectDependency;
 import org.gradle.api.tasks.bundling.AbstractArchiveTask;
+import org.zeroturnaround.zip.FileSource;
+import org.zeroturnaround.zip.ZipEntrySource;
+import org.zeroturnaround.zip.ZipUtil;
+import org.zeroturnaround.zip.transform.StringZipEntryTransformer;
+import org.zeroturnaround.zip.transform.ZipEntryTransformerEntry;
 
 import net.fabricmc.loom.LoomGradleExtension;
 import net.fabricmc.loom.task.RemapJarTask;
@@ -58,14 +58,15 @@ import net.fabricmc.loom.task.RemapJarTask;
 public class NestedJars {
 	private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
 
-	public static boolean addNestedJars(Project project, Path modJarPath) {
-		if (getContainedJars(project).isEmpty()) {
+	public static boolean addNestedJars(Project project, Path modJarPath, List<String> forcedNestedDependencies, boolean addNestedDependencies) {
+		List<File> containedJars = getContainedJars(project, forcedNestedDependencies, addNestedDependencies);
+		if (containedJars.isEmpty()) {
 			return false;
 		}
 
 		File modJar = modJarPath.toFile();
 
-		ZipUtil.addOrReplaceEntries(modJar, getContainedJars(project).stream().map(file -> new FileSource("META-INF/jars/" + file.getName(), file)).toArray(ZipEntrySource[]::new));
+		ZipUtil.addOrReplaceEntries(modJar, containedJars.stream().map(file -> new FileSource("META-INF/jars/" + file.getName(), file)).toArray(ZipEntrySource[]::new));
 
 		return ZipUtil.transformEntries(modJar, single(new ZipEntryTransformerEntry("fabric.mod.json", new StringZipEntryTransformer() {
 			@Override
@@ -77,7 +78,7 @@ public class NestedJars {
 					nestedJars = new JsonArray();
 				}
 
-				for (File file : getContainedJars(project)) {
+				for (File file : containedJars) {
 					JsonObject jsonObject = new JsonObject();
 					jsonObject.addProperty("file", "META-INF/jars/" + file.getName());
 					nestedJars.add(jsonObject);
@@ -90,13 +91,15 @@ public class NestedJars {
 		})));
 	}
 
-	private static List<File> getContainedJars(Project project) {
+	private static List<File> getContainedJars(Project project, List<String> forcedNestedDependencies, boolean addAllNestedDependencies) {
 		List<File> fileList = new ArrayList<>();
 
 		Configuration configuration = project.getConfigurations().getByName(Constants.INCLUDE);
 		DependencySet dependencies = configuration.getDependencies();
 
 		for (Dependency dependency : dependencies) {
+			if (!addAllNestedDependencies && !forcedNestedDependencies.contains(dependency.getName())) continue;
+
 			if (dependency instanceof ProjectDependency) {
 				ProjectDependency projectDependency = (ProjectDependency) dependency;
 				Project dependencyProject = projectDependency.getDependencyProject();

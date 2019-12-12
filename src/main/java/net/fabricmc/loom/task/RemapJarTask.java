@@ -24,21 +24,6 @@
 
 package net.fabricmc.loom.task;
 
-import java.io.File;
-import java.io.FileNotFoundException;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.util.LinkedHashSet;
-import java.util.Set;
-
-import org.gradle.api.Project;
-import org.gradle.api.file.RegularFileProperty;
-import org.gradle.api.provider.Property;
-import org.gradle.api.tasks.Input;
-import org.gradle.api.tasks.InputFile;
-import org.gradle.api.tasks.TaskAction;
-import org.gradle.jvm.tasks.Jar;
-
 import net.fabricmc.loom.LoomGradleExtension;
 import net.fabricmc.loom.providers.MappingsProvider;
 import net.fabricmc.loom.util.GradleSupport;
@@ -48,15 +33,34 @@ import net.fabricmc.loom.util.TinyRemapperMappingsHelper;
 import net.fabricmc.tinyremapper.OutputConsumerPath;
 import net.fabricmc.tinyremapper.TinyRemapper;
 import net.fabricmc.tinyremapper.TinyUtils;
+import org.gradle.api.Project;
+import org.gradle.api.file.RegularFileProperty;
+import org.gradle.api.provider.ListProperty;
+import org.gradle.api.provider.Property;
+import org.gradle.api.tasks.Input;
+import org.gradle.api.tasks.InputFile;
+import org.gradle.api.tasks.TaskAction;
+import org.gradle.jvm.tasks.Jar;
+
+import java.io.File;
+import java.io.FileNotFoundException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Set;
 
 public class RemapJarTask extends Jar {
 	private RegularFileProperty input;
 	private Property<Boolean> addNestedDependencies;
+	private ListProperty<String> forcedNestedDependencies;
 
 	public RemapJarTask() {
 		super();
 		input = GradleSupport.getfileProperty(getProject());
 		addNestedDependencies = getProject().getObjects().property(Boolean.class);
+		forcedNestedDependencies = getProject().getObjects().listProperty(String.class);
 	}
 
 	@TaskAction
@@ -76,7 +80,7 @@ public class RemapJarTask extends Jar {
 		String toM = "intermediary";
 
 		Set<File> classpathFiles = new LinkedHashSet<>(
-						project.getConfigurations().getByName("compileClasspath").getFiles()
+				project.getConfigurations().getByName("compileClasspath").getFiles()
 		);
 		Path[] classpath = classpathFiles.stream().map(File::toPath).filter((p) -> !input.equals(p) && Files.exists(p)).toArray(Path[]::new);
 
@@ -122,10 +126,9 @@ public class RemapJarTask extends Jar {
 			project.getLogger().debug("Transformed mixin reference maps in output JAR!");
 		}
 
-		if (getAddNestedDependencies().getOrElse(false)) {
-			if (NestedJars.addNestedJars(project, output)) {
-				project.getLogger().debug("Added nested jar paths to mod json");
-			}
+		if (NestedJars.addNestedJars(project, output, getForcedNestedDependencies().getOrElse(new ArrayList<>()),
+				getAddNestedDependencies().getOrElse(false))) {
+			project.getLogger().debug("Added nested jar paths to mod json");
 		}
 
 		/*try {
@@ -148,5 +151,18 @@ public class RemapJarTask extends Jar {
 	@Input
 	public Property<Boolean> getAddNestedDependencies() {
 		return addNestedDependencies;
+	}
+
+	/**
+	 * Accepts a list of {@code archivesBaseName}s of mods.
+	 * Mods with these names will be added as nested (jar in jar) dependencies,
+	 * <i>even when {@link RemapJarTask#addNestedDependencies} is false.</i>
+	 * <p>
+	 * <b>This property has no effect when {@link RemapJarTask#addNestedDependencies} is true!</b>
+	 * </p>
+	 */
+	@Input
+	public ListProperty<String> getForcedNestedDependencies() {
+		return forcedNestedDependencies;
 	}
 }
