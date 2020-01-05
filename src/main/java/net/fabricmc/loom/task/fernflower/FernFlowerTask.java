@@ -24,16 +24,11 @@
 
 package net.fabricmc.loom.task.fernflower;
 
-import static java.text.MessageFormat.format;
-
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.Stack;
-import java.util.function.Supplier;
-
-import org.jetbrains.java.decompiler.main.extern.IFernflowerPreferences;
+import net.fabricmc.loom.task.AbstractDecompileTask;
+import net.fabricmc.loom.task.ForkingJavaExecTask;
+import net.fabricmc.loom.util.ConsumingOutputStream;
+import net.fabricmc.loom.util.OperatingSystem;
+import org.checkerframework.checker.nullness.qual.Nullable;
 import org.gradle.api.internal.project.ProjectInternal;
 import org.gradle.api.logging.LogLevel;
 import org.gradle.api.tasks.Input;
@@ -42,11 +37,16 @@ import org.gradle.internal.logging.progress.ProgressLogger;
 import org.gradle.internal.logging.progress.ProgressLoggerFactory;
 import org.gradle.internal.service.ServiceRegistry;
 import org.gradle.process.ExecResult;
+import org.jetbrains.java.decompiler.main.extern.IFernflowerPreferences;
 
-import net.fabricmc.loom.task.AbstractDecompileTask;
-import net.fabricmc.loom.task.ForkingJavaExecTask;
-import net.fabricmc.loom.util.ConsumingOutputStream;
-import net.fabricmc.loom.util.OperatingSystem;
+import java.io.File;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.util.*;
+import java.util.function.Supplier;
+import java.util.regex.Pattern;
+
+import static java.text.MessageFormat.format;
 
 /**
  * Created by covers1624 on 9/02/19.
@@ -55,11 +55,51 @@ public class FernFlowerTask extends AbstractDecompileTask implements ForkingJava
 	private boolean noFork = false;
 	private int numThreads = Runtime.getRuntime().availableProcessors();
 
+
+	private File getJarsDir() {
+		return getExtension().getMinecraftMappedProvider().getMappedJar().getParentFile();
+	}
+
+	private @Nullable Path getClosestCompiledJar() {
+		Pattern namedJarRegex = Pattern.compile("minecraft-.*-mapped-net.fabricmc.yarn-.*-v2.jar");
+		File[] candidateJars = getJarsDir().listFiles((file) -> {
+			String name = file.getName();
+			return !name.equals(getInput().getName()) && namedJarRegex.matcher(name).find();
+		});
+
+		assert candidateJars != null;
+		if (candidateJars.length == 0) {
+			getLogger().lifecycle("There are no older named minecraft jars in store; The sources jar will be decompiled from scratch");
+			return null;
+		} else {
+			// Return the newest of available jars
+			return Arrays.stream(candidateJars).max(Comparator.comparingLong(File::lastModified)).get().toPath();
+		}
+	}
+
+//	private @Nullable Path getSourcesJar(@Nullable Path compiledJar) {
+//		if (compiledJar == null) return null;
+//		Path jarsDir = compiledJar.getParent();
+//		String compiledFileName = compiledJar.getFileName();
+//		Path sourceJar = Paths.get(jarsDir, )
+//	}
+
 	@TaskAction
 	public void doTask() throws Throwable {
 		if (!OperatingSystem.is64Bit()) {
 			throw new UnsupportedOperationException("FernFlowerTask requires a 64bit JVM to run due to the memory requirements");
 		}
+
+		Path closestCompiledJar = getClosestCompiledJar();
+		List<String> changedClasses = new ArrayList<>();
+		List<String> unchangedClasses = new ArrayList<>();
+		Path changedFilesDir = IncrementalDecompilation.diffCompiledJars(getInput().toPath(),
+				closestCompiledJar, changedClasses, unchangedClasses);
+
+		if (closestCompiledJar != null) {
+			getLogger().lifecycle("");
+		}
+
 
 		Map<String, Object> options = new HashMap<>();
 		options.put(IFernflowerPreferences.DECOMPILE_GENERIC_SIGNATURES, "1");
@@ -71,7 +111,7 @@ public class FernFlowerTask extends AbstractDecompileTask implements ForkingJava
 		List<String> args = new ArrayList<>();
 
 		options.forEach((k, v) -> args.add(format("-{0}={1}", k, v)));
-		args.add(getInput().getAbsolutePath());
+		args.add(changedFilesDir.toAbsolutePath().toString());
 		args.add("-o=" + getOutput().getAbsolutePath());
 
 		if (getLineMapFile() != null) {
